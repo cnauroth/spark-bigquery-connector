@@ -17,10 +17,13 @@ package com.google.cloud.spark.bigquery.write;
 
 import static com.google.cloud.spark.bigquery.SparkBigQueryUtil.scalaMapToJavaMap;
 
+import com.google.cloud.bigquery.Schema;
 import com.google.cloud.bigquery.connector.common.BigQueryClient;
 import com.google.cloud.bigquery.connector.common.BigQueryUtil;
 import com.google.cloud.spark.bigquery.DataSourceVersion;
 import com.google.cloud.spark.bigquery.InjectorBuilder;
+import com.google.cloud.spark.bigquery.SchemaConverters;
+import com.google.cloud.spark.bigquery.SchemaConvertersConfiguration;
 import com.google.cloud.spark.bigquery.SparkBigQueryConfig;
 import com.google.cloud.spark.bigquery.write.context.BigQueryDataSourceWriterModule;
 import com.google.common.annotations.VisibleForTesting;
@@ -32,6 +35,7 @@ import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SQLContext;
 import org.apache.spark.sql.SaveMode;
 import org.apache.spark.sql.sources.BaseRelation;
+import org.apache.spark.sql.types.StructType;
 
 public class CreatableRelationProviderHelper {
 
@@ -75,6 +79,18 @@ public class CreatableRelationProviderHelper {
     return relation;
   }
 
+  public BaseRelation createRelation(
+      SQLContext sqlContext,
+      scala.collection.immutable.Map<String, String> parameters,
+      StructType schema,
+      SaveMode saveMode,
+      Map<String, String> customDefaults) {
+    Map<String, String> properties = scalaMapToJavaMap(parameters);
+    BigQueryInsertableRelationBase relation =
+        createBigQueryInsertableRelation(sqlContext, properties, schema, saveMode, customDefaults);
+    return relation;
+  }
+
   @VisibleForTesting
   BigQueryInsertableRelationBase createBigQueryInsertableRelation(
       SQLContext sqlContext,
@@ -93,6 +109,26 @@ public class CreatableRelationProviderHelper {
             .build();
 
     return createBigQueryInsertableRelationInternal(sqlContext, data, saveMode, injector);
+  }
+
+  @VisibleForTesting
+  BigQueryInsertableRelationBase createBigQueryInsertableRelation(
+      SQLContext sqlContext,
+      Map<String, String> properties,
+      StructType schema,
+      SaveMode saveMode,
+      Map<String, String> customDefaults) {
+    Injector injector =
+        new InjectorBuilder()
+            .withDataSourceVersion(DataSourceVersion.V1)
+            .withSpark(sqlContext.sparkSession())
+            .withSchema(schema)
+            .withOptions(properties)
+            .withCustomDefaults(customDefaults)
+            .withTableIsMandatory(true)
+            .build();
+
+    return createBigQueryInsertableRelationInternal(sqlContext, schema, saveMode, injector);
   }
 
   public BigQueryInsertableRelationBase createBigQueryInsertableRelation(
@@ -123,6 +159,29 @@ public class CreatableRelationProviderHelper {
         injector.createChildInjector(
             new BigQueryDataSourceWriterModule(
                 config, UUID.randomUUID().toString(), data.schema(), saveMode));
+    return new BigQueryDataSourceWriterInsertableRelation(
+        bigQueryClient, sqlContext, config, writerInjector);
+  }
+
+  private BigQueryInsertableRelationBase createBigQueryInsertableRelationInternal(
+      SQLContext sqlContext, StructType schema, SaveMode saveMode, Injector injector) {
+    SparkBigQueryConfig config = injector.getInstance(SparkBigQueryConfig.class);
+    BigQueryClient bigQueryClient = injector.getInstance(BigQueryClient.class);
+
+    SparkBigQueryConfig.WriteMethod writeMethod = config.getWriteMethod();
+    if (writeMethod == SparkBigQueryConfig.WriteMethod.INDIRECT) {
+      return new BigQueryDeprecatedIndirectInsertableRelation(bigQueryClient, sqlContext, config);
+    }
+
+    Schema bigQuerySchema =
+        SchemaConverters.from(SchemaConvertersConfiguration.from(config)).toBigQuerySchema(schema);
+    bigQueryClient.createTableIfNeeded(config.getTableId(), bigQuerySchema, config);
+
+    // Need DataSourceWriterContext
+    Injector writerInjector =
+        injector.createChildInjector(
+            new BigQueryDataSourceWriterModule(
+                config, UUID.randomUUID().toString(), schema, saveMode));
     return new BigQueryDataSourceWriterInsertableRelation(
         bigQueryClient, sqlContext, config, writerInjector);
   }

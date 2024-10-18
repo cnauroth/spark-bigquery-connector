@@ -35,12 +35,16 @@ import org.apache.spark.sql.connector.catalog.TableProvider;
 import org.apache.spark.sql.connector.expressions.Transform;
 import org.apache.spark.sql.sources.BaseRelation;
 import org.apache.spark.sql.sources.CreatableRelationProvider;
+import org.apache.spark.sql.sources.SchemaRelationProvider;
 import org.apache.spark.sql.types.StructType;
 import org.apache.spark.sql.util.CaseInsensitiveStringMap;
 import scala.collection.JavaConverters;
 
 public class Spark31BigQueryTableProvider extends BaseBigQuerySource
-    implements TableProvider, CreatableRelationProvider, LineageRelationProvider {
+    implements TableProvider,
+        CreatableRelationProvider,
+        LineageRelationProvider,
+        SchemaRelationProvider {
 
   private static final Transform[] EMPTY_TRANSFORM_ARRAY = {};
 
@@ -72,6 +76,15 @@ public class Spark31BigQueryTableProvider extends BaseBigQuerySource
       Dataset<Row> data) {
     return new CreatableRelationProviderHelper()
         .createRelation(sqlContext, mode, parameters, data, ImmutableMap.of());
+  }
+
+  @Override
+  public BaseRelation createRelation(
+      SQLContext sqlContext,
+      scala.collection.immutable.Map<String, String> parameters,
+      StructType schema) {
+    return new CreatableRelationProviderHelper()
+        .createRelation(sqlContext, parameters, schema, SaveMode.Append, ImmutableMap.of());
   }
 
   @Override
